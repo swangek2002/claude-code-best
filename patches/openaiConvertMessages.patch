@@ -1,0 +1,30 @@
+diff --git a/packages/@ant/model-provider/src/shared/openaiConvertMessages.ts b/packages/@ant/model-provider/src/shared/openaiConvertMessages.ts
+index f896a674..aa4fe66d 100644
+--- a/packages/@ant/model-provider/src/shared/openaiConvertMessages.ts
++++ b/packages/@ant/model-provider/src/shared/openaiConvertMessages.ts
+@@ -220,10 +220,23 @@ function convertInternalAssistantMessage(
+     // Skip redacted_thinking, server_tool_use, etc.
+   }
+ 
++  const hasToolCalls = toolCalls.length > 0
++  // OpenAI/DeepSeek require an assistant message to have `content` OR
++  // `tool_calls` set. `content: null` is only valid when tool_calls is present.
++  // A thinking-only assistant turn (reasoning_content but no text, no tools)
++  // would otherwise serialize to {content: null} with no tool_calls and get
++  // rejected with 400 "Invalid assistant message: content or tool_calls must be
++  // set" — so fall back to an empty string in that case.
++  const assistantContent =
++    textParts.length > 0
++      ? textParts.join('\n')
++      : hasToolCalls
++        ? null
++        : ''
+   const result: ChatCompletionAssistantMessageParam = {
+     role: 'assistant',
+-    content: textParts.length > 0 ? textParts.join('\n') : null,
+-    ...(toolCalls.length > 0 && { tool_calls: toolCalls }),
++    content: assistantContent,
++    ...(hasToolCalls && { tool_calls: toolCalls }),
+     ...(reasoningParts.length > 0 && {
+       reasoning_content: reasoningParts.join('\n'),
+     }),
