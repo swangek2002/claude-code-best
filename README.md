@@ -1,10 +1,17 @@
-# CCB-DeepSeek for ACMLab viz — drop-in Claude Code agent + browser chat
+# CCB for ACMLab viz — drop-in Claude Code agent + browser chat (DeepSeek **or** local Qwable)
 
 This is the **integration layer** that adds a second agent — **CCB ("Claude
-Code Best", the open-source Claude Code rebuild)** running on **DeepSeek v4 pro**
-— to an ACMLab neuroimaging-viz deployment, side-by-side with the existing
-opencode agent, plus a **left-side chat box** in the web page so *any visitor
-who can reach the page can drive either agent and run skills from the browser*.
+Code Best", the open-source Claude Code rebuild)** — to an ACMLab
+neuroimaging-viz deployment, side-by-side with the existing opencode agent, plus
+a **left-side chat box** in the web page so *any visitor who can reach the page
+can drive either agent and run skills from the browser*.
+
+**CCB's model is switchable.** It can run on **DeepSeek v4 pro** (paid API) or on
+a **local Qwable-3.6 model** served by your own ollama (free, no API cost), and
+within Qwable you can pick **大 / 中 / 小** sizes. Switch right in the browser
+dropdown or with the `CCB_PROFILE` env var — see **§4 Switching models** below.
+Two ways to get Qwable: **Version 1** connects to a Qwable already running on the
+shared tesla server; **Version 2** installs Qwable locally on your own machine.
 
 It does **not** re-host CCB itself (CCB is cloned at install time from its own
 repo; it is "for learning/research, rights to Anthropic"). This repo is only the
@@ -22,7 +29,8 @@ self-injecting chat widget, a skills-sync script, and an installer.
 
 - A `💬 AGENT` panel on the left of the viz page — pick **Original · opencode**
   or **Claude Code Best**, type an instruction, watch it run skills.
-- Both agents use **deepseek-v4-pro**, keep independent sessions, run in the
+- opencode runs **deepseek-v4-pro**; **CCB's model is switchable** — DeepSeek or
+  local Qwable 大/中/小 (see §4). Both keep independent sessions and run in the
   project dir (so they see `CLAUDE.md` + your skills and can curl localhost).
 - **Async job model** (`POST /api/chat` → `GET /api/chat/poll`): a slow skill
   turn (ssh/scp, minutes) never freezes the single-threaded Tornado page.
@@ -140,15 +148,83 @@ agents unattended, so neither can pause for a permission prompt.)
 
 ---
 
-## 4. What's in here
+## 4. Switching models — DeepSeek ↔ Qwable (大 / 中 / 小)
+
+The CCB agent's backend is chosen by a **profile**. Switch it three ways:
+
+- **Browser:** pick *Claude Code Best* in the chat box → a **Model** dropdown
+  appears, listing DeepSeek + the Qwable sizes actually installed.
+- **CLI:** `CCB_PROFILE=qwable-medium ./scripts/ccb-agent.sh -p "…"`
+- **Default:** set `CCB_DEFAULT_PROFILE=qwable-small` in the viz server env to
+  make a profile the default for the browser box.
+
+| Profile | Model | VRAM | Notes |
+|---|---|---|---|
+| `deepseek` | deepseek-v4-pro (cloud) | — | paid API; strongest on long/hard agentic tasks |
+| `qwable-large` (大) | Qwable-3.6-**35b** Q8_0 | ~37 GB (needs 40GB+, e.g. 2×24GB) | best local quality |
+| `qwable-medium` (中) | Qwable-3.6-**35b** Q4_K_M | ~21 GB (fits one 24GB GPU) | same 35B brain, faster |
+| `qwable-small` (小) | Qwable-3.6-**27b** Q4_K_M | ~16 GB (fits one 24GB GPU) | smaller model, fastest |
+
+All Qwable profiles talk to an **ollama OpenAI-compatible endpoint**, set by one
+env var (the only thing that differs between the two versions below):
+
+```bash
+export QWABLE_OLLAMA_URL=http://127.0.0.1:11500/v1
+```
+
+### Version 1 — on the tesla server (Qwable already running)
+Qwable is already installed and served on tesla (private ollama, port 11500).
+You do **not** reinstall the model — just point CCB at the running endpoint:
+
+```bash
+# in your viz deployment ON tesla
+export QWABLE_OLLAMA_URL=http://127.0.0.1:11500/v1   # the shared Qwable endpoint
+# (re)start your viz server so ccb_chat.py picks it up
+```
+Then in the browser box: *Claude Code Best* → Model → **Qwable 大 / 中 / 小**.
+CLI: `CCB_PROFILE=qwable-medium ./scripts/ccb-agent.sh -p "hello"`
+
+> The shared daemon must be up. If the dropdown shows Qwable as *(not installed)*,
+> (re)start it on tesla: `./scripts/qwable-serve.sh` — it's a per-user `nohup`
+> daemon and does **not** survive a reboot.
+
+### Version 2 — on your own machine (install Qwable locally)
+One script installs an up-to-date ollama (no sudo), pulls the size(s), and starts
+the daemon:
+
+```bash
+./install-qwable-local.sh --sizes "small medium"     # add "large" only if you have 40GB+ VRAM
+export QWABLE_OLLAMA_URL=http://127.0.0.1:11500/v1
+# (re)start your viz server
+```
+After a reboot, bring the daemon back with `./scripts/qwable-serve.sh`.
+Requirements: Linux/amd64 + NVIDIA + `zstd`. (macOS: install the official ollama
+app, `ollama pull` the tags in the table, then set `QWABLE_OLLAMA_URL`.)
+
+### Which to use — honest guidance
+On **simple / short** tasks (single skill calls, quick edits) Qwable is
+competitive with DeepSeek and **free**. On **long, multi-step agentic** work
+DeepSeek-v4-pro is clearly stronger (SWE-bench Verified 80.6 vs ~73.4 for the
+Qwen3.6-35B base; tiny per-step error gaps compound over many tool calls).
+Practical setup: **default to a Qwable size for cheap/high-volume work, switch to
+`deepseek` for the hard tasks.** If you want the strongest *local* option, the
+official `Qwen/Qwen3.6-35B-A3B` is a reasonable alternative to this community
+finetune.
+
+---
+
+## 5. What's in here
 
 ```
-backend/ccb_chat.py            Flask routes: /api/chat, /api/chat/poll, /api/chat/agents (async job model)
-frontend/ccb-chat-widget.js    self-injecting chat panel (one <script> tag)
-scripts/ccb-deepseek.sh        launcher: CCB on DeepSeek (OpenAI-compat, thinking mode auto-on)
+backend/ccb_chat.py            Flask routes: /api/chat, /api/chat/poll, /api/chat/agents, /api/chat/models (async jobs + model switching)
+frontend/ccb-chat-widget.js    self-injecting chat panel + CCB model dropdown (one <script> tag)
+scripts/ccb-agent.sh           unified launcher: CCB on DeepSeek OR Qwable 大/中/小, selected by CCB_PROFILE
+scripts/ccb-deepseek.sh        legacy launcher: CCB on DeepSeek only (kept for back-compat)
+scripts/qwable-serve.sh        start/ensure a private ollama daemon serving the Qwable models
 scripts/sync-skills.sh         convert flat ~/.claude/skills/*.md → CCB SKILL.md dirs
+install-qwable-local.sh        Version 2: install ollama + pull Qwable size(s) locally (no sudo)
 patches/openaiConvertMessages.patch   the DeepSeek 400 fix (thinking-only assistant turn)
-install.sh                     orchestrates the above (safe: copies + prints wiring lines)
+install.sh                     orchestrates CCB build + launchers + assets (safe: copies + prints wiring lines)
 ```
 
 ### The one bug fix you must keep
@@ -160,7 +236,7 @@ second turn of any tool-using conversation. (`patches/openaiConvertMessages.patc
 
 ---
 
-## 5. Reproducing the comparison
+## 6. Reproducing the comparison
 The benchmark harness used for the numbers above (drivers for both agents, the
 anti-fabrication test, the CDP/VNC screenshot tooling for human visual checks)
 lives in the viz repo under `agent-benchmark/`. The full skill-by-skill

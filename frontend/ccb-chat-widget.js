@@ -35,7 +35,11 @@
     ".chat-input-row{padding:12px;border-top:1px solid #30363d;display:flex;gap:8px}",
     "#chat-input{flex:1;resize:none;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:8px;font-family:inherit;font-size:.85rem}",
     "#chat-send{background:#238636;color:#fff;border:none;border-radius:6px;padding:0 16px;cursor:pointer;font-weight:600;font-size:.85rem}",
-    "#chat-send:disabled{opacity:.5;cursor:default}"
+    "#chat-send:disabled{opacity:.5;cursor:default}",
+    ".chat-model-row{display:none;margin-top:8px;align-items:center;gap:6px}",
+    ".chat-model-row.show{display:flex}",
+    ".chat-model-row label{font-size:.72rem;color:#8b949e;white-space:nowrap}",
+    "#chat-model{flex:1;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:5px;font-size:.76rem}"
   ].join("\n");
 
   var HTML =
@@ -47,7 +51,11 @@
     '      <button class="chat-agent-btn active" id="agent-btn-opencode">Original · opencode</button>' +
     '      <button class="chat-agent-btn" id="agent-btn-ccb">Claude Code Best</button>' +
     '    </div>' +
-    '    <div class="chat-hint">Both run DeepSeek v4 pro · independent sessions · can run skills</div>' +
+    '    <div class="chat-model-row" id="chat-model-row">' +
+    '      <label>Model</label>' +
+    '      <select id="chat-model"></select>' +
+    '    </div>' +
+    '    <div class="chat-hint">opencode runs DeepSeek · CCB can switch DeepSeek / Qwable 大中小 · independent sessions</div>' +
     '  </div>' +
     '  <div class="chat-msgs" id="chat-msgs"></div>' +
     '  <div class="chat-input-row">' +
@@ -65,6 +73,8 @@
     while (wrap.firstChild) document.body.appendChild(wrap.firstChild);
 
     var agent = "opencode";
+    var profile = "deepseek";              // CCB model profile (deepseek | qwable-large/medium/small)
+    var profileLabels = {};
     var sessions = { opencode: null, ccb: null };
     var busy = false;
     var $ = function (id) { return document.getElementById(id); };
@@ -83,7 +93,26 @@
       agent = a;
       $("agent-btn-opencode").classList.toggle("active", a === "opencode");
       $("agent-btn-ccb").classList.toggle("active", a === "ccb");
+      $("chat-model-row").classList.toggle("show", a === "ccb");   // model picker only for CCB
       addMsg("system", "Switched to " + (a === "ccb" ? "Claude Code Best (CCB)" : "Original (opencode)") + " · independent session");
+    }
+    function loadModels() {
+      fetch("/api/chat/models").then(function (r) { return r.json(); }).then(function (d) {
+        var sel = $("chat-model"); sel.innerHTML = "";
+        (d.models || []).forEach(function (m) {
+          var o = document.createElement("option");
+          o.value = m.profile;
+          o.textContent = m.label + (m.available ? "" : " (not installed)");
+          o.disabled = !m.available;
+          profileLabels[m.profile] = m.label;
+          sel.appendChild(o);
+        });
+        var models = d.models || [];
+        var avail = models.filter(function (m) { return m.available; });
+        profile = d.default || "deepseek";
+        if (!avail.some(function (m) { return m.profile === profile; }) && avail.length) profile = avail[0].profile;
+        sel.value = profile;
+      }).catch(function () {});
     }
     async function sendChat() {
       if (busy) return;
@@ -92,13 +121,13 @@
       if (!msg) return;
       inp.value = ""; addMsg("user", msg);
       busy = true; $("chat-send").disabled = true;
-      var label = agent === "ccb" ? "CCB" : "opencode";
+      var label = agent === "ccb" ? ("CCB·" + (profileLabels[profile] || profile)) : "opencode";
       var status = addMsg("system", label + " thinking…");
       var t0 = Date.now();
       try {
         var r = await fetch("/api/chat", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: msg, agent: agent, session_id: sessions[agent] })
+          body: JSON.stringify({ message: msg, agent: agent, profile: profile, session_id: sessions[agent] })
         });
         var start = await r.json();
         if (!start.job_id) throw new Error(start.error || "no job id");
@@ -132,14 +161,19 @@
     $("agent-btn-opencode").addEventListener("click", function () { selectAgent("opencode"); });
     $("agent-btn-ccb").addEventListener("click", function () { selectAgent("ccb"); });
     $("chat-send").addEventListener("click", sendChat);
+    $("chat-model").addEventListener("change", function () {
+      profile = this.value;
+      addMsg("system", "CCB model → " + (profileLabels[profile] || profile));
+    });
     $("chat-input").addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
     });
     addMsg("system", "Pick an agent above and type an instruction. e.g. \"open a sample brain in NiiVue\" or \"segment sub941's T1\".");
-    // Tell the backend which agents are reachable.
+    // Tell the backend which agents are reachable, and load the CCB model list.
     fetch("/api/chat/agents").then(function (r) { return r.json(); }).then(function (a) {
       if (!a.ccb) $("agent-btn-ccb").title = "CCB launcher not found — see install README";
     }).catch(function () {});
+    loadModels();
   }
 
   if (document.readyState === "loading") {

@@ -52,12 +52,17 @@ echo "==> 3/6  Build CCB (bun install + vite split build) — a few minutes"
 ( cd "$CCB_DIR" && bun install && bun run build:vite )
 [ -f "$CCB_DIR/dist/cli.js" ] || { echo "ERROR: build produced no dist/cli.js"; exit 1; }
 
-echo "==> 4/6  Install the launcher → $PROJECT_DIR/scripts/ccb-deepseek.sh"
+echo "==> 4/6  Install launchers → $PROJECT_DIR/scripts/"
 mkdir -p "$PROJECT_DIR/scripts" "$CCB_HOME"
-sed -e "s|__CCB_DIR__|$CCB_DIR|" -e "s|__KEYFILE__|$KEYFILE|" -e "s|__CCB_HOME__|$CCB_HOME|" \
-    "$HERE/scripts/ccb-deepseek.sh" > "$PROJECT_DIR/scripts/ccb-deepseek.sh"
-chmod +x "$PROJECT_DIR/scripts/ccb-deepseek.sh"
-echo "    smoke test:"; ( cd /tmp && OPENCODE_BASE="$OPENCODE" "$PROJECT_DIR/scripts/ccb-deepseek.sh" -p "Reply with exactly: CCB-OK" 2>/dev/null | tail -1 )
+# ccb-agent.sh = unified launcher (deepseek + qwable sizes); ccb-deepseek.sh kept for back-compat.
+for L in ccb-deepseek.sh ccb-agent.sh; do
+  sed -e "s|__CCB_DIR__|$CCB_DIR|" -e "s|__KEYFILE__|$KEYFILE|" -e "s|__CCB_HOME__|$CCB_HOME|" \
+      "$HERE/scripts/$L" > "$PROJECT_DIR/scripts/$L"
+  chmod +x "$PROJECT_DIR/scripts/$L"
+done
+cp "$HERE/scripts/qwable-serve.sh" "$PROJECT_DIR/scripts/qwable-serve.sh"
+chmod +x "$PROJECT_DIR/scripts/qwable-serve.sh"
+echo "    smoke test (deepseek profile):"; ( cd /tmp && OPENCODE_BASE="$OPENCODE" CCB_PROFILE=deepseek "$PROJECT_DIR/scripts/ccb-agent.sh" -p "Reply with exactly: CCB-OK" 2>/dev/null | tail -1 )
 
 echo "==> 5/6  Sync skills into CCB (so it can run your skills)"
 if [ -n "$SKILLS_SRC" ] && [ -d "$SKILLS_SRC" ]; then
@@ -88,8 +93,19 @@ DONE. Two small wiring steps remain (your files differ, so do them by hand):
          <script src="/ccb-chat-widget.js"></script>
 
  Then restart your viz server. Open the page → a blue "💬 AGENT" tab on the
- left → toggle between "Original · opencode" and "Claude Code Best".
+ left → pick "Claude Code Best" → a Model dropdown appears (DeepSeek / Qwable
+ 大中小). It only offers the Qwable sizes that are actually pulled.
 
- Env knobs (optional): OPENCODE_BASE=$OPENCODE  OPENAI_BASE_URL  CHAT_TIMEOUT_S
+ (C) QWABLE (optional, free local LLM instead of paid DeepSeek):
+   • Version 1 — this tesla server (Qwable already running on :11500):
+        export QWABLE_OLLAMA_URL=http://127.0.0.1:11500/v1   # then (re)start the viz server
+   • Version 2 — your own machine:
+        ./install-qwable-local.sh --sizes "small medium"     # installs ollama + pulls models
+        export QWABLE_OLLAMA_URL=http://127.0.0.1:11500/v1
+   CLI use:  CCB_PROFILE=qwable-small ./scripts/ccb-agent.sh -p "hello"
+   See README "Switching models (DeepSeek / Qwable 大中小)" for details.
+
+ Env knobs (optional): OPENCODE_BASE=$OPENCODE  QWABLE_OLLAMA_URL
+   CCB_DEFAULT_PROFILE(deepseek|qwable-small|…)  CHAT_TIMEOUT_S
 ────────────────────────────────────────────────────────────────────────────
 EOF
